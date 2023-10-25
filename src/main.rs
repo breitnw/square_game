@@ -6,10 +6,10 @@ use rand::prelude::SliceRandom;
 use rand::Rng;
 use rust_embed::RustEmbed;
 use sdl2;
-use sdl2::event::Event;
+use sdl2::event::{Event, WindowEvent};
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
-use sdl2::render::{BlendMode, Texture, TextureCreator, WindowCanvas};
+use sdl2::render::{BlendMode, Canvas, RenderTarget, Texture, TextureCreator, WindowCanvas};
 use sdl2::image::LoadTexture;
 use sdl2::keyboard::Keycode;
 use sdl2::mouse::{MouseButton, MouseState};
@@ -233,13 +233,28 @@ fn draw(canvas: &mut WindowCanvas,
     }
 }
 
+pub fn update_canvas_scale<T: RenderTarget>(
+    canvas: &mut Canvas<T>,
+    window_width: u32,
+    window_height: u32,
+) {
+    let (w, h) = canvas.output_size().unwrap();
+    canvas
+        .set_scale((w / window_width) as f32, (h / window_height) as f32)
+        .unwrap();
+}
+
 fn main() {
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
 
+    const WINDOW_WIDTH: u32 = 400;
+    const WINDOW_HEIGHT: u32 = 300;
+
     // init window and canvas
-    let window = video_subsystem.window("square game", 400, 300)
+    let window = video_subsystem.window("square game", WINDOW_WIDTH, WINDOW_HEIGHT)
         .position_centered()
+        .allow_highdpi()
         .build()
         .unwrap();
     let mut canvas = window
@@ -253,6 +268,7 @@ fn main() {
 
     // prepare the canvas
     canvas.set_draw_color(Color::RGB(0,90,20));
+    update_canvas_scale(&mut canvas, WINDOW_WIDTH, WINDOW_HEIGHT);
     canvas.clear();
     canvas.present();
 
@@ -295,6 +311,15 @@ fn main() {
                 Event::KeyDown { keycode: Some(Keycode::R), .. } => {
                     board = Board::random(6, 8, Player::RED);
                 }
+                Event::Window { win_event, .. } => {
+                    match win_event {
+                        WindowEvent::Moved { .. } => {
+                            // Update the canvas scale in case the user drags the window to a different monitor
+                            update_canvas_scale(&mut canvas, WINDOW_WIDTH, WINDOW_HEIGHT);
+                        }
+                        _ => {}
+                    }
+                }
                 _ => {}
             }
         }
@@ -328,6 +353,7 @@ fn main() {
         let text_texture = &texture_creator.create_texture_from_surface(text).unwrap();
         canvas.copy(text_texture, None, text_rect).unwrap();
 
+        update_canvas_scale(&mut canvas, WINDOW_WIDTH, WINDOW_HEIGHT);
         canvas.present();
         std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60))
     }
