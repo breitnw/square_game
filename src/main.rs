@@ -299,8 +299,6 @@ fn main() {
             }
         }
 
-        dbg!(board.is_empty());
-
         if board.current_turn == Player::BLUE && !board.is_empty() {
             board.take_optimal_move();
             board.next_turn();
