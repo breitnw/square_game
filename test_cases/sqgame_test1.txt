@@ -1,0 +1,7 @@
+1
+3
+9
+1
+10
+8
+Player A wins. First move can be on row=3, eat_tiles=8 

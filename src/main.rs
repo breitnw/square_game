@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::iter;
+use std::{env, fs, iter};
+use std::path::Path;
 use std::time::Duration;
+use args::Args;
 use rand::prelude::SliceRandom;
 use rand::Rng;
 use rust_embed::RustEmbed;
@@ -12,10 +14,12 @@ use sdl2::rect::Rect;
 use sdl2::render::{BlendMode, Canvas, RenderTarget, Texture, TextureCreator, WindowCanvas};
 use sdl2::image::LoadTexture;
 use sdl2::keyboard::Keycode;
-use sdl2::mouse::{MouseButton, MouseState};
+use sdl2::mouse::MouseState;
 use sdl2::rwops::RWops;
 use sdl2::ttf::Font;
 use sdl2::video::WindowContext;
+use getopts;
+use sdl2::sys;
 
 #[cfg(test)]
 mod tests;
@@ -33,27 +37,38 @@ struct Meal {
 }
 
 struct Board {
+    filename: Option<String>,
     rows: Vec<Row>,
-    current_turn: Player
+    current_turn: Player,
+    auto: bool
 }
 
 impl Board {
     /// Creates a board with a set of defined row lengths.
-    fn new(row_lengths: Vec<u8>, starting_turn: Player) -> Self {
+    fn new(filename: Option<String>, row_lengths: Vec<u8>, starting_turn: Player, auto: bool) -> Self {
         let rows = row_lengths
             .iter()
             .map(|l| Row {orig_length: *l, eaten_squares: Vec::new()})
             .collect();
-        Board { rows, current_turn: starting_turn }
+        Board {filename, rows, current_turn: starting_turn, auto }
+    }
+
+    fn from_file(filename: String, starting_turn: Player, auto: bool) -> Self {
+        let row_lengths = fs::read_to_string(&filename)
+            .unwrap()
+            .lines()
+            .filter_map(|x| x.parse().ok())
+            .collect();
+        Board::new(Some(filename), row_lengths, starting_turn, auto)
     }
 
     /// Creates a random board with `num_rows` rows, each with one to `max_row_length` squares.
-    fn random(num_rows: usize, max_row_length: u8, starting_turn: Player) -> Self {
+    fn random(num_rows: usize, max_row_length: u8, starting_turn: Player, auto: bool) -> Self {
         let mut rng = rand::thread_rng();
         let rows = (0..num_rows)
             .map(|_| Row {orig_length: rng.gen_range(1..=max_row_length), eaten_squares: Vec::new()})
             .collect();
-        Board { rows, current_turn: starting_turn }
+        Board { filename: None, rows, current_turn: starting_turn, auto }
     }
 
     /// Consumes a given number of squares from a given row, as defined by `meal`.
@@ -70,12 +85,12 @@ impl Board {
     /// overflow) of all of the bits in each column (1s, 2s, 4s, etc.) and checking if each sum is
     /// 0; which, in turn, is equivalent to taking the decimal sum of all of the bits in each column
     /// and checking if each sum mod 2 is 0.
-    fn test_optimal(&self, test_row: usize, test_amount: u8) -> bool {
+    fn test_optimal(&self, test_meal: Meal) -> bool {
         self.rows
             .iter()
             .enumerate()
             .map(|(row_y, row)|
-                row.get_remaining() - if row_y == test_row { test_amount } else { 0 })
+                row.get_remaining() - if row_y == test_meal.row_y { test_meal.amount } else { 0 })
             .fold(0, |acc, test_remaining| acc ^ test_remaining) == 0
     }
 
@@ -85,7 +100,7 @@ impl Board {
     fn find_optimal_move(&self) -> Option<Meal> {
         for (row_y, row) in self.rows.iter().enumerate() {
             for amount in 1..=row.get_remaining() {
-                if self.test_optimal(row_y, amount) {
+                if self.test_optimal(Meal { row_y, amount }) {
                     return Some(Meal {row_y, amount})
                 }
             }
@@ -219,7 +234,11 @@ fn draw(canvas: &mut WindowCanvas,
             // if we're on the last square, draw the count in binary afterward
             if sqr_x == row.orig_length - 1 {
                 let binary = format!("{:08b}", row.get_remaining());
-                let text = font.render(&binary[4..])
+                let num_significant = binary.chars().skip_while(|c| *c == '0').count();
+                let text = font.render(
+                    &binary.chars()
+                        .skip(if num_significant > 4 {0} else {4})
+                        .collect::<String>())
                     .solid(Color::RGB(234, 200, 102)).unwrap();
                 let mut text_rect = text.rect();
 
@@ -232,8 +251,7 @@ fn draw(canvas: &mut WindowCanvas,
         }
     }
 }
-
-pub fn update_canvas_scale<T: RenderTarget>(
+fn update_canvas_scale<T: RenderTarget>(
     canvas: &mut Canvas<T>,
     window_width: u32,
     window_height: u32,
@@ -244,11 +262,53 @@ pub fn update_canvas_scale<T: RenderTarget>(
         .unwrap();
 }
 
+unsafe fn parse_args() -> Board {
+    let mut args = Args::new("square_game", "an optimal square game solver created for NEU CS1800 Acc.");
+    args.flag("h", "help", "Print the usage menu");
+    args.flag("a", "auto", "Pit two bots against each other instead of playing manually");
+    args.option("f",
+                "file",
+                "The path to a file containing a test case for the program",
+                "FILENAME",
+                getopts::Occur::Optional,
+                None);
+    args.parse(env::args().collect::<Vec<_>>()).unwrap_or_else(|a| {
+        println!("Error: Arguments not in correct format");
+        println!("{}", args.full_usage());
+        sys::exit(1);
+    });
+
+    let help = args.value_of("help")
+        .is_ok_and(|x: String| x == "true");
+    let auto = args.value_of("auto")
+        .is_ok_and(|x: String| x == "true");
+    let filename: Option<String> = args.value_of("file")
+        .ok()
+        .and_then(|f|
+            if f == "false" { None }
+            else if !Path::exists(Path::new(&f)) {
+                println!("Error: No file exists: {}", f);
+                sys::exit(1);
+                None
+            } else { Some(f) } );
+
+    if help {
+        println!("{}", args.full_usage());
+        sys::exit(0);
+    }
+
+    if let Some(filename) = filename {
+        Board::from_file(filename, Player::RED, auto)
+    } else {
+        Board::random(6, 10, Player::RED, auto)
+    }
+}
+
 fn main() {
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
 
-    const WINDOW_WIDTH: u32 = 400;
+    const WINDOW_WIDTH: u32 = 700;
     const WINDOW_HEIGHT: u32 = 300;
 
     // init window and canvas
@@ -278,7 +338,8 @@ fn main() {
     let font = ttf_context.load_font_from_rwops(font_ttf, 16).unwrap();
 
     // prepare the game state
-    let mut board = Board::random(6, 8, Player::RED);
+    let mut board = unsafe { parse_args() };
+
     let mut event_pump = sdl_context.event_pump().unwrap();
 
     'running: loop {
@@ -290,10 +351,7 @@ fn main() {
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit {..} => { break 'running }
-                Event::MouseButtonDown { mouse_btn, .. } => {
-                    if mouse_btn != MouseButton::Left {
-                        return;
-                    }
+                Event::MouseButtonDown {..} => {
                     for row_y in 0..board.rows.len() {
                         let eat_to: i32 = (0..board.rows[row_y].orig_length).filter(|sqr_x| {
                             let square = get_square_rect(*sqr_x, row_y);
@@ -309,7 +367,11 @@ fn main() {
                     }
                 }
                 Event::KeyDown { keycode: Some(Keycode::R), .. } => {
-                    board = Board::random(6, 8, Player::RED);
+                    if let Some(filename) = board.filename {
+                        board = Board::from_file(filename, Player::RED, board.auto)
+                    } else {
+                        board = Board::random(6, 15, Player::RED, board.auto);
+                    }
                 }
                 Event::Window { win_event, .. } => {
                     match win_event {
@@ -324,7 +386,7 @@ fn main() {
             }
         }
 
-        if board.current_turn == Player::BLUE && !board.is_empty() {
+        if (board.auto || board.current_turn == Player::BLUE) && !board.is_empty() {
             board.take_optimal_move();
             board.next_turn();
         }

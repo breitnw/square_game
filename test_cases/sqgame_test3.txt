@@ -1,0 +1,14 @@
+8
+15
+10
+15
+4
+11
+5
+11
+11
+2
+4
+4
+11
+Player A wins. First move can be on row=2, eat_tiles=1 
