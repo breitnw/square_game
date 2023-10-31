@@ -53,6 +53,7 @@ impl Board {
         Board {filename, rows, current_turn: starting_turn, auto }
     }
 
+    /// Loads a board from a test case file
     fn from_file(filename: String, starting_turn: Player, auto: bool) -> Self {
         let row_lengths = fs::read_to_string(&filename)
             .unwrap()
